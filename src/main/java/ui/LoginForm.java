@@ -79,15 +79,13 @@ public class LoginForm extends JFrame {
             }
 
             // Tentative d'authentification
-            authService.authenticateAndRedirect(phone, password);
+            authService.authenticateAndRedirect(phone, password, this); // Ajout du paramètre this (la JFrame actuelle)
 
             // Nettoyage des champs sensibles
             Arrays.fill(passwordChars, '\0');
             phoneField.setText("");
             passwordField.setText("");
 
-            // Fermeture de la fenêtre de login
-            dispose();
         } catch (AuthenticationException e) {
             showError("Échec de l'authentification", e.getMessage());
         } catch (IllegalArgumentException e) {
@@ -107,13 +105,10 @@ public class LoginForm extends JFrame {
         );
     }
 
-    /**
-     * Point d'entrée de l'application.
-     */
-    public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            LoginForm loginForm = new LoginForm();
-            loginForm.setVisible(true);
-        });
-    }
+//    public static void main(String[] args) {
+//        SwingUtilities.invokeLater(() -> {
+//            LoginForm loginForm = new LoginForm();
+//            loginForm.setVisible(true);
+//        });
+//    }
 }

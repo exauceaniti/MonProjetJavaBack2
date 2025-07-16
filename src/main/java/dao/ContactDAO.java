@@ -7,309 +7,191 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Classe DAO (Data Access Object) pour la gestion des contacts dans la base de données.
- * Fournit toutes les opérations CRUD (Create, Read, Update, Delete) pour la table contacts.
- */
 public class ContactDAO {
-
     // Requêtes SQL préparées
-    public static final String INSERT_SQL = "INSERT INTO contacts (nom, postnom, email, numero_telephone, genre, adresse) VALUES (?, ?, ?, ?, ?, ?)";
-    public static final String SELECT_ALL_SQL = "SELECT * FROM contacts";
-    public static final String SELECT_BY_ID_SQL = "SELECT * FROM contacts WHERE id = ?";
-    public static final String DELETE_SQL = "DELETE FROM contacts WHERE id = ?";
+    private static final String INSERT_SQL = "INSERT INTO contacts (nom, postnom, " +
+            "email, numero_telephone, genre, adresse, photo_contact) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    private static final String SELECT_ALL_SQL = "SELECT * FROM contacts";
+    private static final String SELECT_BY_ID_SQL = "SELECT * FROM contacts WHERE id = ?";
+    private static final String DELETE_SQL = "DELETE FROM contacts WHERE id = ?";
+    private static final String SEARCH_SQL = "SELECT * FROM contacts WHERE nom LIKE ? " +
+            "OR postnom LIKE ? OR numero_telephone LIKE ?";
+    private static final String UPDATE_SQL = "UPDATE contacts SET nom = ?, " +
+            "postnom = ?, email = ?, numero_telephone = ?, genre = ?, adresse = ?, " +
+            "photo_contact = ? WHERE id = ?";
 
     /**
-     * Ajoute un nouveau contact dans la base de données.
-     *
-     * @param contact L'objet Contact à ajouter (ne doit pas être null)
-     * @return true si l'ajout a réussi, false sinon
-     * @throws IllegalArgumentException si le contact est null
+     * Méthode de recherche unifiée optimisée
      */
-    public boolean addContact(Contact contact) {
-        if (contact == null) {
-            throw new IllegalArgumentException("Le contact ne peut pas être null");
+    public List<Contact> searchContacts(String searchTerm) {
+        List<Contact> contacts = new ArrayList<>();
+
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            return getAllContacts();
         }
 
         try (Connection conn = DBConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(INSERT_SQL, Statement.RETURN_GENERATED_KEYS)) {
+             PreparedStatement stmt = conn.prepareStatement(SEARCH_SQL)) {
 
-            // Paramétrage de la requête
-            stmt.setString(1, contact.getNom());
-            stmt.setString(2, contact.getPostnom());
-            stmt.setString(3, contact.getEmail());
-            stmt.setString(4, contact.getNumeroTelephone());
-            stmt.setString(5, contact.getGenre());
-            stmt.setString(6, contact.getAdresse());
+            String pattern = "%" + searchTerm + "%";
+            stmt.setString(1, pattern);
+            stmt.setString(2, pattern);
+            stmt.setString(3, pattern);
 
-            // Exécution de la requête
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    contacts.add(mapResultSetToContact(rs));
+                }
+            }
+        } catch (SQLException e) {
+            handleSQLException("Erreur lors de la recherche", e);
+        }
+        return contacts;
+    }
+
+    /**
+     * Ajout d'un contact avec gestion des clés générées
+     */
+    public boolean addContact(Contact contact) {
+        if (contact == null) {
+            throw new IllegalArgumentException("Contact ne peut pas être null");
+        }
+
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(INSERT_SQL,
+                     Statement.RETURN_GENERATED_KEYS)) {
+
+            setContactParameters(stmt, contact);
+
             int affectedRows = stmt.executeUpdate();
-
-            // Récupération de l'ID généré
             if (affectedRows > 0) {
                 try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
                     if (generatedKeys.next()) {
                         contact.setId(generatedKeys.getInt(1));
+                        return true;
                     }
                 }
-                return true;
             }
         } catch (SQLException e) {
-            handleSQLException("Erreur lors de l'ajout du contact", e);
+            handleSQLException("Erreur lors de l'ajout", e);
         }
         return false;
     }
 
     /**
-     * Met à jour un contact existant dans la base de données.
-     * Seuls les champs non-nuls de l'objet contact seront mis à jour.
-     *
-     * @param contact L'objet Contact contenant les modifications (doit avoir un ID valide)
-     * @return true si la mise à jour a réussi, false sinon
-     * @throws IllegalArgumentException si le contact est null ou n'a pas d'ID
+     * Mise à jour complète d'un contact
      */
     public boolean updateContact(Contact contact) {
         if (contact == null || contact.getId() <= 0) {
-            throw new IllegalArgumentException("Contact invalide ou ID manquant");
+            throw new IllegalArgumentException("Contact invalide");
         }
-
-        StringBuilder sql = new StringBuilder("UPDATE contacts SET ");
-        List<Object> params = new ArrayList<>();
-
-        // Construction dynamique de la requête
-        if (contact.getNom() != null) {
-            sql.append("nom = ?, ");
-            params.add(contact.getNom());
-        }
-        if (contact.getPostnom() != null) {
-            sql.append("postnom = ?, ");
-            params.add(contact.getPostnom());
-        }
-        if (contact.getEmail() != null) {
-            sql.append("email = ?, ");
-            params.add(contact.getEmail());
-        }
-        if (contact.getNumeroTelephone() != null) {
-            sql.append("numero_telephone = ?, ");
-            params.add(contact.getNumeroTelephone());
-        }
-        if (contact.getGenre() != null) {
-            sql.append("genre = ?, ");
-            params.add(contact.getGenre());
-        }
-        if (contact.getAdresse() != null) {
-            sql.append("adresse = ?, ");
-            params.add(contact.getAdresse());
-        }
-
-        // Vérification qu'au moins un champ a été modifié
-        if (params.isEmpty()) {
-            return false;
-        }
-
-        // Finalisation de la requête
-        sql.delete(sql.length() - 2, sql.length()); // Supprime la dernière virgule
-        sql.append(" WHERE id = ?");
-        params.add(contact.getId());
 
         try (Connection conn = DBConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
+             PreparedStatement stmt = conn.prepareStatement(UPDATE_SQL)) {
 
-            // Paramétrage dynamique
-            for (int i = 0; i < params.size(); i++) {
-                stmt.setObject(i + 1, params.get(i));
-            }
+            setContactParameters(stmt, contact);
+            stmt.setInt(8, contact.getId());
 
             return stmt.executeUpdate() > 0;
         } catch (SQLException e) {
-            handleSQLException("Erreur lors de la mise à jour du contact", e);
+            handleSQLException("Erreur lors de la mise à jour", e);
             return false;
         }
     }
 
     /**
-     * Récupère un contact par son ID.
-     *
-     * @param id L'ID du contact à rechercher
-     * @return Un Optional contenant le contact trouvé, ou Optional.empty() si non trouvé
-     * @throws IllegalArgumentException si l'ID est invalide (<= 0)
+     * Récupération par ID avec Optional
      */
     public Optional<Contact> findById(int id) {
         if (id <= 0) {
-            throw new IllegalArgumentException("ID invalide");
+            return Optional.empty();
         }
 
         try (Connection conn = DBConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(SELECT_BY_ID_SQL)) {
-
             stmt.setInt(1, id);
-
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
                     return Optional.of(mapResultSetToContact(rs));
                 }
             }
         } catch (SQLException e) {
-            handleSQLException("Erreur lors de la recherche du contact par ID", e);
+            handleSQLException("Erreur lors de la recherche par ID", e);
         }
         return Optional.empty();
     }
 
     /**
-     * Récupère tous les contacts de la base de données.
-     *
-     * @return Une liste des contacts (peut être vide mais jamais null)
+     * Récupération de tous les contacts
      */
     public List<Contact> getAllContacts() {
         List<Contact> contacts = new ArrayList<>();
-
         try (Connection conn = DBConnection.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(SELECT_ALL_SQL)) {
-
             while (rs.next()) {
                 contacts.add(mapResultSetToContact(rs));
             }
         } catch (SQLException e) {
-            handleSQLException("Erreur lors de la récupération des contacts", e);
+            handleSQLException("Erreur lors de la récupération", e);
         }
         return contacts;
     }
 
     /**
-     * Recherche des contacts par nom (recherche partielle insensible à la casse).
-     *
-     * @param nom Le nom ou partie du nom à rechercher
-     * @return Une liste des contacts correspondants (peut être vide mais jamais null)
-     * @throws IllegalArgumentException si le nom est null ou vide
-     */
-    public List<Contact> findByNom(String nom) {
-        if (nom == null || nom.trim().isEmpty()) {
-            throw new IllegalArgumentException("Le nom ne peut pas être vide");
-        }
-        return searchByField("nom", nom);
-    }
-
-    /**
-     * Recherche des contacts par postnom (recherche partielle insensible à la casse).
-     *
-     * @param postnom Le postnom ou partie du postnom à rechercher
-     * @return Une liste des contacts correspondants (peut être vide mais jamais null)
-     * @throws IllegalArgumentException si le postnom est null ou vide
-     */
-    public List<Contact> findByPostnom(String postnom) {
-        if (postnom == null || postnom.trim().isEmpty()) {
-            throw new IllegalArgumentException("Le postnom ne peut pas être vide");
-        }
-        return searchByField("postnom", postnom);
-    }
-
-    /**
-     * Recherche des contacts par nom ou postnom (recherche partielle insensible à la casse).
-     *
-     * @param searchTerm Le terme à rechercher dans les champs nom et postnom
-     * @return Une liste des contacts correspondants (peut être vide mais jamais null)
-     * @throws IllegalArgumentException si le terme de recherche est null ou vide
-     */
-    public List<Contact> findByNomOrPostnom(String searchTerm) {
-        if (searchTerm == null || searchTerm.trim().isEmpty()) {
-            throw new IllegalArgumentException("Le terme de recherche ne peut pas être vide");
-        }
-
-        List<Contact> contacts = new ArrayList<>();
-        String sql = "SELECT * FROM contacts WHERE nom LIKE ? OR postnom LIKE ?";
-
-        try (Connection conn = DBConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            String searchPattern = "%" + searchTerm + "%";
-            stmt.setString(1, searchPattern);
-            stmt.setString(2, searchPattern);
-
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    contacts.add(mapResultSetToContact(rs));
-                }
-            }
-        } catch (SQLException e) {
-            handleSQLException("Erreur lors de la recherche par nom/postnom", e);
-        }
-        return contacts;
-    }
-
-    /**
-     * Supprime un contact de la base de données.
-     *
-     * @param id L'ID du contact à supprimer
-     * @return true si la suppression a réussi, false sinon
-     * @throws IllegalArgumentException si l'ID est invalide (<= 0)
+     * Suppression d'un contact
      */
     public boolean deleteContact(int id) {
         if (id <= 0) {
-            throw new IllegalArgumentException("ID invalide");
+            return false;
         }
-
         try (Connection conn = DBConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(DELETE_SQL)) {
-
             stmt.setInt(1, id);
             return stmt.executeUpdate() > 0;
         } catch (SQLException e) {
-            handleSQLException("Erreur lors de la suppression du contact", e);
+            handleSQLException("Erreur lors de la suppression", e);
             return false;
         }
     }
 
-    // Méthodes privées utilitaires
 
+    // ===== MÉTHODES UTILITAIRES PRIVÉES =====
     /**
-     * Méthode générique pour rechercher par champ.
-     */
-    private List<Contact> searchByField(String fieldName, String value) {
-        List<Contact> contacts = new ArrayList<>();
-        String sql = String.format("SELECT * FROM contacts WHERE %s LIKE ?", fieldName);
-
-        try (Connection conn = DBConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, "%" + value + "%");
-
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    contacts.add(mapResultSetToContact(rs));
-                }
-            }
-        } catch (SQLException e) {
-            handleSQLException("Erreur lors de la recherche par " + fieldName, e);
-        }
-        return contacts;
-    }
-
-    /**
-     * Convertit un ResultSet en objet Contact.
-     *
-     * @param rs Résultat SQL contenant les colonnes du contact
-     * @return Objet Contact avec les données du résultat
-     * @throws SQLException Si une lecture échoue
+     * Mapping ResultSet → Contact
      */
     private Contact mapResultSetToContact(ResultSet rs) throws SQLException {
-        return new Contact(
-                rs.getInt("id"),
-                rs.getString("nom"),
-                rs.getString("postnom"),
-                rs.getString("email"),
-                rs.getString("numero_telephone"),
-                rs.getString("genre"),
-                rs.getString("adresse"),
-                rs.getInt("compte_id") // ✅ Ajout du champ manquant
-        );
+        Contact contact = new Contact();
+        contact.setId(rs.getInt("id"));
+        contact.setNom(rs.getString("nom"));
+        contact.setPostnom(rs.getString("postnom"));
+        contact.setEmail(rs.getString("email"));
+        contact.setNumeroTelephone(rs.getString("numero_telephone"));
+        contact.setGenre(rs.getString("genre"));
+        contact.setAdresse(rs.getString("adresse"));
+        contact.setPhotoContact(rs.getInt("photo_contact"));
+        return contact;
     }
 
     /**
-     * Gère les exceptions SQL de manière uniforme.
+     * Paramétrage commun pour insert/update
      */
-    private void handleSQLException(String message, SQLException e) {
-        System.err.println(message + ": " + e.getMessage());
+    private void setContactParameters(PreparedStatement stmt, Contact contact) throws SQLException {
+        stmt.setString(1, contact.getNom());
+        stmt.setString(2, contact.getPostnom());
+        stmt.setString(3, contact.getEmail());
+        stmt.setString(4, contact.getNumeroTelephone());
+        stmt.setString(5, contact.getGenre());
+        stmt.setString(6, contact.getAdresse());
+        stmt.setInt(7, contact.getPhotoContact());
+    }
+
+    /**
+     * Gestion centralisée des erreurs SQL
+     */
+    private void handleSQLException(String context, SQLException e) {
+        System.err.println(context + ": " + e.getMessage());
         e.printStackTrace();
+        // Ici vous pourriez ajouter une journalisation plus sophistiquée
     }
 }
